@@ -1,17 +1,14 @@
 import { Canvas } from "@react-three/fiber/native";
 import { Suspense } from "react";
-import { View, StyleSheet } from "react-native";
+import { Dimensions, StyleSheet, View } from "react-native";
 import GameScene from "./GameScene";
 import GameUI from "./GameUI";
-import { useBreathingGame } from "@/lib/stores/useBreathingGame";
-import { AmbientLight } from "three";
 
 const Game = () => {
-  const { gameState } = useBreathingGame();
-
   return (
     <View style={styles.container}>
       <Canvas
+        style={styles.canvas}
         gl={{
           powerPreference: "high-performance",
           alpha: true,
@@ -42,6 +39,11 @@ const styles = StyleSheet.create({
     flex: 1,
     width: "100%",
     height: "100%",
+  },
+  canvas: {
+    flex: 1,
+    height: Dimensions.get("window").height,
+    width: Dimensions.get("window").width,
   },
 });
 
