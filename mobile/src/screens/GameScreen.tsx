@@ -2,8 +2,15 @@ import GameScene from "@/components/game/GameScene";
 import GameUI from "@/components/game/GameUI";
 import { useNavigation } from "@react-navigation/native";
 import { Canvas } from "@react-three/fiber/native";
-import React, { Suspense, useCallback, useMemo } from "react";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
+  ActivityIndicator,
   Dimensions,
   StyleSheet,
   Text,
@@ -41,6 +48,15 @@ const LIGHTING_CONFIG = {
 export default function GameScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { endGame } = useBreathingGame();
+  const [showGameScene, setShowGameScene] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowGameScene(true);
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   // Memoized event handler to prevent recreation on every render
   const handleEndSession = useCallback(() => {
@@ -64,6 +80,16 @@ export default function GameScreen() {
     []
   );
 
+  // Memoized loader component
+  const loaderComponent = useMemo(
+    () => (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#4f46e5" />
+      </View>
+    ),
+    []
+  );
+
   // Memoized game controls to prevent recreation
   const gameControls = useMemo(
     () => (
@@ -78,6 +104,12 @@ export default function GameScreen() {
 
   return (
     <View style={styles.gameContainer}>
+      <View style={styles.skyGradient}>
+        <View style={[styles.gradientLayer, { backgroundColor: "#b15cd0" }]} />
+        <View style={[styles.gradientLayer, { backgroundColor: "#e2b1f0" }]} />
+        <View style={[styles.gradientLayer, { backgroundColor: "#d0b3c5" }]} />
+        <View style={[styles.gradientLayer, { backgroundColor: "#f1f5f9" }]} />
+      </View>
       <Canvas
         style={styles.canvas}
         gl={CANVAS_CONFIG.gl}
@@ -85,9 +117,10 @@ export default function GameScreen() {
       >
         <Suspense fallback={null}>
           {lightingComponents}
-          <GameScene />
+          {showGameScene && <GameScene />}
         </Suspense>
       </Canvas>
+      {!showGameScene && loaderComponent}
       <GameUI />
       {gameControls}
     </View>
@@ -127,5 +160,20 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "600",
     textAlign: "center",
+  },
+  loadingContainer: {
+    flex: 1,
+  },
+  skyGradient: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: "column",
+  },
+  gradientLayer: {
+    flex: 1,
+    width: "100%",
   },
 });
