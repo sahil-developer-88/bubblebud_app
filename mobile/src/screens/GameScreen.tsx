@@ -53,7 +53,7 @@ export default function GameScreen() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowGameScene(true);
-    }, 100);
+    }, 1000);
 
     return () => clearTimeout(timer);
   }, []);
@@ -121,7 +121,7 @@ export default function GameScreen() {
         </Suspense>
       </Canvas>
       {!showGameScene && loaderComponent}
-      <GameUI />
+      {showGameScene && <GameUI />}
       {gameControls}
     </View>
   );
