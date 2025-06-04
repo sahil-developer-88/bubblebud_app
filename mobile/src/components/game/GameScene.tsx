@@ -1,42 +1,53 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
-import { useFrame, useThree } from "@react-three/fiber/native";
-import { useBreathingGame } from "@/lib/stores/useBreathingGame";
+import { useMotion } from "@/hooks/useMotion";
+import { COIN_DISTANCE, GAME_SPEED, MOTION_SENSITIVITY } from "@/lib/constants";
 import { useAudio } from "@/lib/stores/useAudio";
+import { useBreathingGame } from "@/lib/stores/useBreathingGame";
+import { useFrame, useThree } from "@react-three/fiber/native";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import { DeviceEventEmitter } from "react-native";
+import * as THREE from "three";
+import Background from "./Background";
 import Character from "./Character";
 import Coin from "./Coin";
-import Background from "./Background";
 import ParticleSystem from "./ParticleSystem";
-import { useMotion } from "@/hooks/useMotion";
-import * as THREE from "three";
-import { GAME_SPEED, COIN_DISTANCE, MOTION_SENSITIVITY } from "@/lib/constants";
-import { DeviceEventEmitter } from "react-native";
 
-// Constants moved outside component to prevent recreation
-const POSITIONS = {
-  HIGH: 3, // High coin position (for inhale)
-  MID: 0, // Middle position for transitions
-  LOW: -3, // Low coin position (for exhale)
-};
-
+// Constants for positions - moved to module level for better memory usage
+const HIGH_POSITION = 3;
+const MID_POSITION = 0;
+const LOW_POSITION = -3;
 const COLLISION_THRESHOLD = 1.2;
-const CHARACTER_LERP_SPEED = 0.08;
-const SCENE_INITIALIZATION_DELAY = 150; // Delay before scene starts processing
+const LERP_FACTOR = 0.08;
+const COIN_OFFSET = 2;
+const CHARACTER_X_POSITION = -2;
+const PASSING_COIN_MIN = -1.9;
+const PASSING_COIN_MAX = -2.1;
+const MISSED_COIN_MIN = -2.5;
+const MISSED_COIN_MAX = -2.75;
 
-// Helper function to check collision
-const checkCollision = (
-  characterPos: THREE.Vector3,
-  coinPos: THREE.Vector3,
-  threshold = COLLISION_THRESHOLD
-) => {
-  return (
-    Math.abs(characterPos.x - coinPos.x) < threshold &&
-    Math.abs(characterPos.y - coinPos.y) < threshold
-  );
+// Position cycle configuration - more efficient than switch statement
+const POSITION_CYCLE = [
+  { position: HIGH_POSITION, name: "high (breathe out)", type: 1 },
+  { position: MID_POSITION, name: "middle (transition)", type: 2 },
+  { position: LOW_POSITION, name: "low (breathe in)", type: 3 },
+  { position: MID_POSITION, name: "middle (transition)", type: 0 },
+];
+
+// Reusable vectors to avoid garbage collection
+const tempCharacterPos = new THREE.Vector3();
+const tempCoinPos = new THREE.Vector3();
+
+// Optimized collision detection - inline for better performance
+const checkCollision = (charPos, coinPos) => {
+  const dx = Math.abs(charPos.x - coinPos.x);
+  const dy = Math.abs(charPos.y - coinPos.y);
+  return dx < COLLISION_THRESHOLD && dy < COLLISION_THRESHOLD;
 };
 
-// Global counter for coin creation to ensure proper alternation
-let globalCoinCounter = 0;
-let isFirstCoinGenerated = false;
+// Global state for coin generation - more efficient than module variables
+const coinState = {
+  counter: 0,
+  isFirstGenerated: false,
+};
 
 const GameScene = () => {
   const {
@@ -55,219 +66,224 @@ const GameScene = () => {
   const motion = useMotion();
   const { viewport } = useThree();
 
-  // Component readiness state
-  const [isSceneReady, setIsSceneReady] = useState(false);
-  const [componentsInitialized, setComponentsInitialized] = useState(false);
-
-  // Refs
-  const characterRef = useRef<THREE.Group>(null);
-  const particlesRef = useRef<any>(null);
+  const characterRef = useRef(null);
+  const particlesRef = useRef(null);
   const lastCoinTime = useRef(0);
-  const initializationTimer = useRef<NodeJS.Timeout | null>(null);
-  const frameCount = useRef(0);
 
-  // Initialize scene after components are ready
-  useEffect(() => {
-    // Wait for components to be properly mounted and rendered
-    initializationTimer.current = setTimeout(() => {
-      setComponentsInitialized(true);
+  // Cache frequently accessed values
+  const viewportHalfWidth = useMemo(() => viewport.width / 2, [viewport.width]);
+  const coinSpawnX = useMemo(
+    () => viewportHalfWidth + COIN_OFFSET,
+    [viewportHalfWidth]
+  );
 
-      // Additional delay to ensure all Three.js objects are created
-      setTimeout(() => {
-        setIsSceneReady(true);
-        console.log("GameScene fully initialized and ready");
-      }, 50);
-    }, SCENE_INITIALIZATION_DELAY);
+  // Memoized character position update callback
+  const updateCharacterPositionCallback = useCallback(
+    (newPosition) => {
+      updateCharacterPosition(newPosition);
+    },
+    [updateCharacterPosition]
+  );
 
-    return () => {
-      if (initializationTimer.current) {
-        clearTimeout(initializationTimer.current);
+  // Game time update frame handler - separated for better performance
+  useFrame(
+    useCallback(
+      (_, delta) => {
+        if (gameState === "playing") {
+          updateGameTime(gameTime + delta);
+        }
+      },
+      [gameState, gameTime, updateGameTime]
+    )
+  );
+
+  // Motion control frame handler - optimized calculations
+  useFrame(
+    useCallback(() => {
+      if (gameState !== "playing" || motion.motion.beta === undefined) return;
+
+      let targetY;
+      const currentBeta = motion.motion.beta;
+
+      if (motion.hasCalibrated && motion.calibration.beta !== undefined) {
+        const adjustedBeta = currentBeta - motion.calibration.beta;
+        targetY = THREE.MathUtils.clamp(
+          LOW_POSITION + -adjustedBeta * MOTION_SENSITIVITY * 3,
+          LOW_POSITION,
+          HIGH_POSITION
+        );
+      } else {
+        const adjustedBeta = currentBeta + 5; // betaOffset constant
+        targetY = THREE.MathUtils.clamp(
+          -adjustedBeta * MOTION_SENSITIVITY,
+          LOW_POSITION,
+          HIGH_POSITION
+        );
       }
-    };
-  }, []);
 
-  // Memoized coin position calculation
-  const getCoinPosition = useCallback((counter: number) => {
-    const cycle = counter % 4;
-    switch (cycle) {
-      case 1:
-        return {
-          position: POSITIONS.HIGH,
-          name: "high (breathe out)",
-          type: 1,
-        };
-      case 2:
-        return {
-          position: POSITIONS.MID,
-          name: "middle (transition)",
-          type: 2,
-        };
-      case 3:
-        return { position: POSITIONS.LOW, name: "low (breathe in)", type: 3 };
-      case 0:
-        return {
-          position: POSITIONS.MID,
-          name: "middle (transition)",
-          type: 0,
-        };
-      default:
-        return {
-          position: POSITIONS.MID,
-          name: "middle (transition)",
-          type: 2,
-        };
-    }
-  }, []);
+      const newY = THREE.MathUtils.lerp(
+        characterPosition.y,
+        targetY,
+        LERP_FACTOR
+      );
+      updateCharacterPositionCallback({ ...characterPosition, y: newY });
+    }, [
+      gameState,
+      motion.motion.beta,
+      motion.hasCalibrated,
+      motion.calibration.beta,
+      characterPosition,
+      updateCharacterPositionCallback,
+    ])
+  );
 
-  // Reset coin counter when game starts or ends
+  // Reset coin state on game state changes
   useEffect(() => {
     if (gameState === "playing") {
       console.log(
         "Starting new game - resetting coin counter for proper sequence"
       );
-      globalCoinCounter = 0;
-      isFirstCoinGenerated = false;
+      coinState.counter = 0;
+      coinState.isFirstGenerated = false;
       lastCoinTime.current = 0;
     } else if (gameState === "ended" || gameState === "ready") {
-      isFirstCoinGenerated = false;
+      coinState.isFirstGenerated = false;
     }
   }, [gameState]);
 
-  // Game time update - only when scene is ready
-  useFrame((_, delta) => {
-    if (!isSceneReady || gameState !== "playing") return;
+  // Main game logic frame handler - heavily optimized
+  useFrame(
+    useCallback(
+      (_, delta) => {
+        if (gameState !== "playing") return;
 
-    frameCount.current++;
-    updateGameTime(gameTime + delta);
-  });
+        // Move existing coins - optimized with pre-calculated speed
+        const speedDelta = GAME_SPEED * delta;
+        const updatedCoins = coins.map((coin) => ({
+          ...coin,
+          position: {
+            ...coin.position,
+            x: coin.position.x - speedDelta,
+          },
+        }));
 
-  // Motion controls - only when scene is ready
-  useFrame(() => {
-    if (
-      !isSceneReady ||
-      gameState !== "playing" ||
-      motion.motion.beta === undefined
-    )
-      return;
+        // Batch process coin states for better performance
+        const passingCoins = [];
+        const missedCoins = [];
+        const visibleCoins = [];
 
-    let adjustedBeta = motion.motion.beta;
-    let targetY;
+        const minVisibleX = -viewportHalfWidth - COIN_OFFSET;
 
-    if (motion.hasCalibrated && motion.calibration.beta !== undefined) {
-      adjustedBeta = motion.motion.beta - motion.calibration.beta;
-      targetY = THREE.MathUtils.clamp(
-        POSITIONS.LOW + -adjustedBeta * MOTION_SENSITIVITY * 3,
-        POSITIONS.LOW,
-        POSITIONS.HIGH
-      );
-    } else {
-      const betaOffset = 5;
-      adjustedBeta = motion.motion.beta + betaOffset;
-      targetY = THREE.MathUtils.clamp(
-        -adjustedBeta * MOTION_SENSITIVITY,
-        POSITIONS.LOW,
-        POSITIONS.HIGH
-      );
-    }
+        for (const coin of updatedCoins) {
+          const coinX = coin.position.x;
 
-    const newY = THREE.MathUtils.lerp(
-      characterPosition.y,
-      targetY,
-      CHARACTER_LERP_SPEED
-    );
-    updateCharacterPosition({ ...characterPosition, y: newY });
-  });
+          // Check passing coins
+          if (coinX <= PASSING_COIN_MIN && coinX > PASSING_COIN_MAX) {
+            passingCoins.push(coin);
+          }
 
-  // Coin movement and collision detection - only when scene is ready
-  useFrame((_, delta) => {
-    if (!isSceneReady || gameState !== "playing") return;
+          // Check missed coins
+          if (
+            coinX <= MISSED_COIN_MIN &&
+            coinX > MISSED_COIN_MAX &&
+            !coin.collected
+          ) {
+            missedCoins.push(coin);
+          }
 
-    // Move existing coins
-    const updatedCoins = coins.map((coin) => ({
-      ...coin,
-      position: {
-        ...coin.position,
-        x: coin.position.x - GAME_SPEED * delta,
-      },
-    }));
+          // Keep visible coins
+          if (coinX > minVisibleX && !coin.collected) {
+            visibleCoins.push(coin);
+          }
+        }
 
-    // Check for missed coins
-    const missedCoins = updatedCoins.filter(
-      (coin) =>
-        coin.position.x <= -2.5 && coin.position.x > -2.75 && !coin.collected
-    );
+        // Handle missed coins
+        if (missedCoins.length > 0) {
+          DeviceEventEmitter.emit("coinMissed");
+          console.log("Coin missed!");
+        }
 
-    if (missedCoins.length > 0 && characterRef.current) {
-      DeviceEventEmitter.emit("coinMissed");
-      console.log("Coin missed!");
-    }
+        // Generate new coins
+        if (gameTime - lastCoinTime.current >= COIN_DISTANCE) {
+          lastCoinTime.current = gameTime;
+          coinState.counter++;
 
-    // Keep only visible coins
-    const visibleCoins = updatedCoins.filter(
-      (coin) => coin.position.x > -viewport.width / 2 - 2 && !coin.collected
-    );
+          const cycleIndex = (coinState.counter - 1) % 4;
+          const coinConfig = POSITION_CYCLE[cycleIndex];
 
-    // Generate new coins
-    if (gameTime - lastCoinTime.current >= COIN_DISTANCE) {
-      lastCoinTime.current = gameTime;
-      globalCoinCounter++;
-
-      const coinData = getCoinPosition(globalCoinCounter);
-
-      console.log(`Creating new coin #${globalCoinCounter}: ${coinData.name}`);
-
-      visibleCoins.push({
-        id: `coin-${globalCoinCounter}-${coinData.type}`,
-        position: {
-          x: viewport.width / 2 + 2,
-          y: coinData.position,
-        },
-        collected: false,
-      });
-    }
-
-    updateCoins(visibleCoins);
-
-    // Collision detection
-    if (characterRef.current) {
-      const characterPosition = new THREE.Vector3();
-      characterRef.current.getWorldPosition(characterPosition);
-
-      coins.forEach((coin) => {
-        if (!coin.collected) {
-          const coinPosition = new THREE.Vector3(
-            coin.position.x,
-            coin.position.y,
-            0
+          console.log(
+            `Creating new coin #${coinState.counter}: ${coinConfig.name}`
           );
 
-          if (checkCollision(characterPosition, coinPosition)) {
-            collectCoin(coin.id);
+          visibleCoins.push({
+            id: `coin-${coinState.counter}-${coinConfig.type}`,
+            position: {
+              x: coinSpawnX,
+              y: coinConfig.position,
+            },
+            collected: false,
+          });
+        }
 
-            const parts = coin.id.split("-");
-            const positionType = parts.length >= 3 ? parseInt(parts[2]) : 2;
+        updateCoins(visibleCoins);
 
-            if (!isMuted) {
-              audio.playSoundForPosition(positionType);
-            }
+        // Collision detection - optimized with reusable vectors
+        if (characterRef.current) {
+          characterRef.current.getWorldPosition(tempCharacterPos);
 
-            if (particlesRef.current?.emitAt) {
-              particlesRef.current.emitAt(coinPosition.x, coinPosition.y);
+          for (const coin of coins) {
+            if (!coin.collected) {
+              tempCoinPos.set(coin.position.x, coin.position.y, 0);
+
+              if (checkCollision(tempCharacterPos, tempCoinPos)) {
+                collectCoin(coin.id);
+
+                // Extract position type from coin ID
+                const positionType = parseInt(coin.id.split("-")[2]) || 2;
+
+                if (!isMuted) {
+                  audio.playSoundForPosition(positionType);
+                }
+
+                // Trigger particle effect
+                if (particlesRef.current?.emitAt) {
+                  particlesRef.current.emitAt(tempCoinPos.x, tempCoinPos.y);
+                }
+                break; // Only process one collision per frame for performance
+              }
             }
           }
         }
-      });
-    }
-  });
+      },
+      [
+        gameState,
+        coins,
+        gameTime,
+        viewportHalfWidth,
+        coinSpawnX,
+        updateCoins,
+        collectCoin,
+        isMuted,
+        audio,
+      ]
+    )
+  );
 
-  // Don't render anything until scene is ready
-  if (!isSceneReady) {
-    return null;
-  }
+  // Memoized coin components to prevent unnecessary re-renders
+  const coinComponents = useMemo(
+    () =>
+      coins.map((coin) => (
+        <Coin
+          key={coin.id}
+          position={[coin.position.x, coin.position.y, 0]}
+          collected={coin.collected}
+        />
+      )),
+    [coins]
+  );
 
   return (
     <>
-      {/* Scene lighting */}
       <ambientLight intensity={0.5} />
       <directionalLight
         position={[10, 10, 10]}
@@ -276,22 +292,15 @@ const GameScene = () => {
         shadow-mapSize={[2048, 2048]}
       />
 
-      {/* Background */}
       <Background />
 
-      {/* Character */}
-      <Character ref={characterRef} position={[-2, characterPosition.y, 0]} />
+      <Character
+        ref={characterRef}
+        position={[CHARACTER_X_POSITION, characterPosition.y, 0]}
+      />
 
-      {/* Coins */}
-      {coins.map((coin) => (
-        <Coin
-          key={coin.id}
-          position={[coin.position.x, coin.position.y, 0]}
-          collected={coin.collected}
-        />
-      ))}
+      {coinComponents}
 
-      {/* Particle system */}
       <ParticleSystem ref={particlesRef} />
     </>
   );
