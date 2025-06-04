@@ -60,7 +60,7 @@ export default function SummaryScreen() {
             style={styles.newSessionButton}
             onPress={() => {
               restartGame();
-              navigation.navigate("Home");
+              navigation.reset({ index: 0, routes: [{ name: "Home" }] });
             }}
           >
             <Text style={styles.buttonText}>New Session</Text>
