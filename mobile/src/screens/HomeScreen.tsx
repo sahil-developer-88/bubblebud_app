@@ -20,52 +20,18 @@ import {
 import { AudioTest } from "../components/AudioTest";
 
 export default function HomeScreen() {
-  console.log("HomeScreen: Component rendering");
   const navigation = useNavigation<NavigationProp>();
-  const [showPermissionRequest, setShowPermissionRequest] = useState(true);
   const [showTips, setShowTips] = useState(false);
   const [showAudioTest, setShowAudioTest] = useState(false);
   const [activeTipPanel, setActiveTipPanel] = useState("calibration");
   const { startGame } = useBreathingGame();
   const { startBackgroundMusic } = useAudio();
 
-  useEffect(() => {
-    console.log("HomeScreen: Component mounted");
-    return () => {
-      console.log("HomeScreen: Component unmounting");
-    };
-  }, []);
-
   const handleStartSession = async (duration: number) => {
     try {
       startBackgroundMusic();
-
-      if (
-        typeof DeviceMotionEvent !== "undefined" &&
-        typeof (DeviceMotionEvent as any).requestPermission === "function"
-      ) {
-        const permissionState = await (
-          DeviceMotionEvent as any
-        ).requestPermission();
-
-        if (permissionState === "granted") {
-          console.log(
-            `Device motion permission granted - starting ${duration} minute session`
-          );
-          setShowPermissionRequest(false);
-          startGame(duration);
-          navigation.navigate("Game", { duration });
-        } else {
-          console.warn("Device motion permission denied");
-        }
-      } else {
-        console.log(
-          `Device motion permission not required - starting ${duration} minute session`
-        );
-        setShowPermissionRequest(false);
-        startGame(duration);
-        navigation.navigate("Game", { duration });
-      }
+      startGame(duration);
+      navigation.navigate("Game", { duration });
     } catch (error) {
       console.error("Error requesting device motion permission:", error);
     }

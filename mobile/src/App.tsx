@@ -10,7 +10,6 @@ import SummaryScreen from "./screens/SummaryScreen";
 
 const Stack = createNativeStackNavigator();
 
-// Constants moved outside component to prevent recreation
 const CANVAS_CONFIG = {
   gl: {
     powerPreference: "high-performance" as const,
@@ -61,7 +60,7 @@ function CanvasBackground() {
 
   return (
     <Canvas
-      style={StyleSheet.absoluteFillObject}
+      style={styles.canvas}
       gl={CANVAS_CONFIG.gl}
       camera={CANVAS_CONFIG.camera}
     >
@@ -98,5 +97,15 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  canvas: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: "100%",
+    height: "100%",
+    zIndex: -1,
   },
 });
